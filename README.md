@@ -22,3 +22,8 @@ sam build
 nohup sam local start-lambda --template .aws-sam/build/template.yaml &
 cargo test -- --nocapture
 ```
+
+## Updating the Infrastructure
+```bash
+aws cloudformation deploy --stack-name ExampleCodeBuildProject --template-file ./templates/infrastructure.yaml --capabilities CAPABILITY_IAM
+```
