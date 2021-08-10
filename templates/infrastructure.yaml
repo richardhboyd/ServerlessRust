@@ -1,0 +1,154 @@
+Parameters:
+  LogGroupName:
+    Type: String
+    Default: /richard/public-build/logs
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      LogsConfig: 
+        CloudWatchLogs:
+          GroupName: !Ref LogGroupName
+          Status: ENABLED
+          StreamName: ServerlessRust
+      Artifacts:
+        Type: S3
+        Location: !Ref ArtifactBucket
+        Name: ServerlessRust
+        NamespaceType: BUILD_ID
+        Packaging: ZIP
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/standard:4.0
+        PrivilegedMode: true
+      Triggers:
+        BuildType: BUILD
+        Webhook: true
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: PULL_REQUEST_CREATED,PULL_REQUEST_UPDATED
+      Source:
+        Type: GITHUB
+        Location: "https://github.com/richardhboyd/ServerlessRust.git"
+        BuildStatusConfig:
+          TargetUrl: $CODEBUILD_PUBLIC_BUILD_URL
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - echo Entered the install phase...
+                - printenv
+                - wget -q https://github.com/aws/aws-sam-cli/releases/latest/download/aws-sam-cli-linux-x86_64.zip
+                - unzip -qq aws-sam-cli-linux-x86_64.zip -d sam-installation 
+                - ./sam-installation/install --update
+                - curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain nightly
+                - # source $HOME/.cargo/env
+                - export PATH=$HOME/.cargo/bin:$PATH
+            build:
+              commands:
+                - sam build
+                - nohup sam local start-lambda --template .aws-sam/build/template.yaml &
+                - cargo test -- --nocapture
+            post_build:
+              commands:
+                - echo Entered the post_build phase...
+                - echo Build completed on `date`
+          artifacts:
+            files:
+              - .aws-sam/build/**/*
+            discard-paths: no
+          reports:
+            reportGroupJUnit:
+              files:
+                - './my-junit.xml'
+              discard-paths: yes
+              file-format: JUNITXML
+      Visibility: PUBLIC_READ
+      ResourceAccessRole: !Ref PublicReadRole
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codebuild.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+
+  CodeBuildPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: PublicBuildPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "logs:CreateLogGroup"
+              - "logs:CreateLogStream"
+              - "logs:PutLogEvents"
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}"
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:*"
+          - Effect: Allow
+            Action:
+              - "s3:PutObject"
+              - "s3:GetBucketAcl"
+              - "s3:GetBucketLocation"
+            Resource:
+              - !Sub "${ArtifactBucket.Arn}"
+              - !Sub "${ArtifactBucket.Arn}/*"
+          - Effect: Allow
+            Action:
+              - "codebuild:CreateReportGroup"
+              - "codebuild:CreateReport"
+              - "codebuild:UpdateReport"
+              - "codebuild:BatchPutTestCases"
+              - "codebuild:BatchPutCodeCoverages"
+            Resource:
+              - !Sub "arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:report-group/${CodeBuildProject}-*"
+      Roles:
+        - !Ref CodeBuildRole
+
+  PublicReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codebuild.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+
+  PublicReadPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: PublicBuildPolicy
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - "logs:GetLogEvents"
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:*"
+          - Effect: Allow
+            Action:
+              - "s3:GetObject"
+              - "s3:GetObjectVersion"
+            Resource:
+              - !Sub "${ArtifactBucket.Arn}/*"
+      Roles:
+        - !Ref PublicReadRole
